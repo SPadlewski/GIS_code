@@ -6,4 +6,4 @@
 
 #bozenko
 
-#nowa bozenka
+#nowa Bozenka

@@ -1,10 +1,17 @@
+
 ---
-title: "prac4_rmarkdown"
-author: "Szymon Padlewski"
-date: "28/10/2020"
-output: html_document
+title: "Untitled"
+output: word_document
 ---
-```{r warning=FALSE}
+
+```{r}
+library(DT)
+datatable(iris, options = list(pageLength = 5))
+```
+
+### Chart 1
+
+```{r}
 library(plotly)
 library(raster)
 library(weathermetrics)
@@ -65,10 +72,11 @@ ihist
 
 
 
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
+
 
 ## R Markdown
 

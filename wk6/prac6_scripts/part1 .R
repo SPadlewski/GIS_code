@@ -58,6 +58,7 @@ tm_shape(BoroughMap) +
 BluePlaques <- distinct(BluePlaques)
 
 #remove BluePlaques outside of london
+BluePlaques <- BluePlaques[BoroughMap,]
 BluePlaquesSub <- BluePlaques[BoroughMap,]
 
 tm_shape(BoroughMap) +
@@ -268,3 +269,31 @@ autoplot.OpenStreetMap(basemap_bng) +
                    fill=dbcluster), 
                alpha = 0.5)  
 
+############## PART 2 ###################
+
+#read the ward data in
+LondonWards <- st_read(here::here("prac6_data/London-wards-2018/London-wards-2018_ESRI", "London_Ward.shp"))
+
+#have a look to check that it's 
+#in the right projection
+st_crs(LondonWards)
+
+tmap_mode("view")
+tm_shape(LondonWards, alpha=.5) +
+  tm_polygons(col = NA, alpha = 0.5) +
+  tm_shape(BluePlaques) +
+  tm_dots(col = "blue")
+
+BluePlaquesSub <- BluePlaques[LondonWards,]
+#counting blueplaques in each wards
+points_sf_joined_2 <- LondonWards%>%
+  st_join(BluePlaquesSub)%>%
+  add_count(NAME)%>%
+  dplyr::distinct(.)
+  #calcualte area
+  mutate(area=st_area(.))%>%
+  summarise(NAME)
+  #then density of the points per ward
+  mutate(density=n/area)%>%
+  #select density and some other variables 
+  dplyr::select(density, WardName, Wardcode, n, AvgGCSE201)

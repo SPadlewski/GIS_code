@@ -25,6 +25,8 @@ library(ggplot2)
 library(tidyverse)
 library(purrr)
 library(OpenStreetMap)
+library(spdep)
+library(spData)
 
 ##First, get the London Borough Boundaries
 LondonBoroughs <- st_read(here::here("..","wk5/Prac5_data", "statistical-gis-boundaries-london", "ESRI", "London_Borough_Excluding_MHW.shp"))
@@ -286,14 +288,131 @@ tm_shape(LondonWards, alpha=.5) +
 
 BluePlaquesSub <- BluePlaques[LondonWards,]
 #counting blueplaques in each wards
-points_sf_joined_2 <- LondonWards%>%
+points_sf_joined <- LondonWards%>%
   st_join(BluePlaquesSub)%>%
   add_count(NAME)%>%
-  dplyr::distinct(.)
   #calcualte area
   mutate(area=st_area(.))%>%
-  summarise(NAME)
   #then density of the points per ward
   mutate(density=n/area)%>%
   #select density and some other variables 
-  dplyr::select(density, WardName, Wardcode, n, AvgGCSE201)
+  dplyr::select(density, NAME, GSS_CODE, n)
+
+points_sf_joined<- points_sf_joined %>%                    
+  group_by(GSS_CODE) %>%         
+  summarise(density = first(density),
+            wardname= first(NAME),
+            plaquecount= first(n))
+            
+
+tm_shape(points_sf_joined) +
+  tm_polygons("density",
+              style="jenks",
+              palette="PuOr",
+              midpoint=NA,
+              popup.vars=c("wardname", "density"),
+              title="Blue Plaque Density")
+
+#First calculate the centroids of all Wards in London
+
+coordsW <- points_sf_joined%>%
+  st_centroid()%>%
+  st_geometry()
+
+plot(coordsW,axes=TRUE)
+
+
+#create a neighbours list
+
+LWard_nb <- points_sf_joined %>%
+  poly2nb(., queen=T)
+
+#plot them
+plot(LWard_nb, st_geometry(coordsW), col="red")
+#add a map underneath
+plot(points_sf_joined$geometry, add=T)
+
+#create a spatial weights object from these weights
+Lward.lw <- LWard_nb %>%
+  nb2listw(., style="C")
+
+head(Lward.lw$neighbours)
+
+#Moran’s I
+I_LWard_Global_Density <- points_sf_joined %>%
+  pull(density) %>%
+  as.vector()%>%
+  moran.test(., Lward.lw)
+
+I_LWard_Global_Density
+
+#Geary’s C
+C_LWard_Global_Density <- 
+  points_sf_joined %>%
+  pull(density) %>%
+  as.vector()%>%
+  geary.test(., Lward.lw)
+
+C_LWard_Global_Density
+
+
+#use the localmoran function to generate I for each ward in the city
+
+I_LWard_Local_count <- points_sf_joined %>%
+  pull(plaquecount) %>%
+  as.vector()%>%
+  localmoran(., Lward.lw)%>%
+  as_tibble()
+
+I_LWard_Local_Density <- points_sf_joined %>%
+  pull(density) %>%
+  as.vector()%>%
+  localmoran(., Lward.lw)%>%
+  as_tibble()
+
+#what does the output (the localMoran object) look like?
+slice_head(I_LWard_Local_Density, n=5)
+
+
+points_sf_joined <- points_sf_joined %>%
+  mutate(plaque_count_I = as.numeric(I_LWard_Local_count$Ii))%>%
+  mutate(plaque_count_Iz =as.numeric(I_LWard_Local_count$Z.Ii))%>%
+  mutate(density_I =as.numeric(I_LWard_Local_Density$Ii))%>%
+  mutate(density_Iz =as.numeric(I_LWard_Local_Density$Z.Ii))
+
+
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+
+MoranColours<- rev(brewer.pal(8, "RdGy"))
+
+tm_shape(points_sf_joined) +
+  tm_polygons("plaque_count_Iz",
+              style="fixed",
+              breaks=breaks1,
+              palette=MoranColours,
+              midpoint=NA,
+              title="Local Moran's I, Blue Plaques in London")
+
+
+Gi_LWard_Local_Density <- points_sf_joined %>%
+  pull(density) %>%
+  as.vector()%>%
+  localG(., Lward.lw)
+
+head(Gi_LWard_Local_Density)
+
+points_sf_joined <- points_sf_joined %>%
+  mutate(density_G = as.numeric(Gi_LWard_Local_Density))
+
+GIColours<- rev(brewer.pal(8, "RdBu"))
+
+#now plot on an interactive map
+tm_shape(points_sf_joined) +
+  tm_polygons("density_G",
+              style="fixed",
+              breaks=breaks1,
+              palette=GIColours,
+              midpoint=NA,
+              title="Gi*, Blue Plaques in London")
+         
+         

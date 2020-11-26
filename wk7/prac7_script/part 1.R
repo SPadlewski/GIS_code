@@ -205,13 +205,140 @@ veg %>%
 
 #Calucating tempearture from Landsat data
 
+install.packages("RStoolbox")
+install.packages("scales")
 library(RStoolbox)
 
+
 MTL<-dir_info(here::here("prac7_data", "Lsatdata")) %>%
-  dplyr::filter(str_detect(path, "MTL.txt")) %>%
+  dplyr::filter(str_detect(path, "LC08_L1TP_203023_20190513_20190521_01_T1_MTL.txt")) %>%
   dplyr::select(path)%>%
   pull()%>%
   readMeta()
 
 #To see all the attributes
 head(MTL)
+
+offsetandgain <-MTL %>%
+  getMeta("B10_dn", metaData = ., what = "CALRAD")
+
+offsetandgain
+
+
+TOA <- offsetandgain$gain *
+  lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B10_mask + 
+  offsetandgain$offset
+
+Calidata <- MTL$CALBT%>%
+  as.data.frame()%>%
+  mutate(Band=rownames(.))%>%
+  filter(Band=="B10_dn")
+
+# subset the columns
+K1 <- Calidata %>%
+  dplyr::select(K1)%>%
+  pull()
+
+K2 <- Calidata %>%
+  dplyr::select(K2)%>%
+  pull()
+
+Brighttemp <- (K2 / log((K1 / TOA) + 1))
+
+# calcualte the fractional vegetation of each pixel
+facveg <- (ndvi-0.2/0.5-0.2)^2
+
+emiss <- 0.004*facveg+0.986
+
+
+Boltzmann <- 1.38*10e-23
+Plank <- 6.626*10e-34
+c <- 2.998*10e8
+
+p <- Plank*(c/Boltzmann)
+
+#define remaining varaibles
+lambda <- 1.09e-5
+#run the LST calculation
+LST <- Brighttemp/(1 +(lambda*Brighttemp/p)*log(emiss))
+# check the values
+LST
+
+
+LST <- LST-273.15
+plot(LST)
+
+#Calucating urban area from Landsat data
+
+NDBI=((lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B6_mask-
+         lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B5_mask)/
+        (lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B6_mask+
+           lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B5_mask))
+
+NDBIfunexample <- NDVIfun(lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B6_mask,
+                          lsatmask$LC08_L1TP_203023_20190513_20190521_01_T1_B5_mask)
+
+plot(values(NDBI), values(LST))
+
+# stack the layers
+
+computeddata <- LST%>%
+  stack(.,NDBI)%>%
+  as.data.frame()%>%
+  na.omit()%>%
+  # take a random subset
+  sample_n(., 500)%>%
+  dplyr::rename(Temp="layer.1", NDBI="layer.2")
+
+# check the output
+plot(computeddata$Temp, computeddata$NDBI)
+
+library(plotly)
+library(htmlwidgets)
+
+heat<-ggplot(computeddata, aes(x = NDBI, y = Temp))+
+  geom_point(alpha=2, colour = "#51A0D5")+
+  labs(x = "Temperature", 
+       y = "Urban index",
+       title = "Manchester urban and temperature relationship")+
+  geom_smooth(method='lm', se=FALSE)+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = 0.5))
+
+# interactive plot
+ggplotly(heat)
+
+computeddatafull <- LST%>%
+  stack(.,NDBI)%>%
+  as.data.frame()%>%
+  na.omit()%>%
+  # take a random subset
+  dplyr::rename(Temp="layer.1", NDBI="layer.2")
+
+hexbins <- ggplot(computeddatafull, 
+                  aes(x=NDBI, y=Temp)) +
+  geom_hex(bins=100, na.rm=TRUE) +
+  labs(fill = "Count per bin")+
+  geom_smooth(method='lm', se=FALSE, size=0.6)+
+  theme_bw()
+
+ggplotly(hexbins)
+
+
+
+library(rstatix)
+install.packages("rstatix")
+
+Correlation <- computeddatafull %>%
+  cor_test(Temp, NDBI, use = "complete.obs", method = c("pearson"))
+
+Correlation
+
+
+abs(qt(0.05/2, 198268))
+
+computeddatafull %>%
+  pull(Temp)%>%
+  length()
+
+length(computeddatafull)

@@ -1,4 +1,4 @@
-install.packages("highcharter")
+#install.packages("highcharter")
 library(highcharter)
 library(tidyverse)
 library(downloader)
@@ -12,7 +12,7 @@ library(downloader)
 library(rgdal)
 library(tmap)
 library(tidymodels)
-install.packages("tidymodels")
+#install.packages("tidymodels")
 
 LondonWards <- st_read(here::here("prac8_data", 
                                   "NewLondonWard",
@@ -204,8 +204,35 @@ histplot +geom_histogram(bins = 30)
 fit <- mydata %>%
   kmeans(., 3, nstart=25)
 
+# get cluster means
+
+centroid <- tidy(fit)%>%
+  #print the results of the cluster groupings
+  print()%>%
+  dplyr::select(PctOwned20, PctNoEngli)
+
+# as we only have variable two dimensions we can plot the clusters on a graph
+p <- ggplot(mydata,aes(PctOwned20, PctNoEngli))+
+  geom_point(aes(colour=factor(fit$cluster)))+
+  geom_point(data=centroid,aes(PctOwned20, PctNoEngli), size=7, shape=18)+ theme(legend.position="none")
+p
+
+LondonWards <- fit %>% 
+  # 
+  augment(., LondonWards)%>%
+  dplyr::select(WD11CD, .cluster)%>%
+  #make sure the .cluster column is numeric
+  mutate(across(.cluster, as.numeric))%>%
+  # join the .cluster to our sf layer
+  left_join(LondonWards, 
+            .,
+            by = c("WD11CD" = "WD11CD"))
 
 
-
+#now map our geodeomographic classification
+map <- ggplot(LondonWards) + 
+  geom_sf(mapping = aes(fill=.cluster))+
+  scale_fill_continuous(breaks=c(1,2,3))
+map
 
 

@@ -1,0 +1,160 @@
+---
+title: "publishexample"
+author: "Szymon Padlewski"
+date: "06/12/2020"
+output:
+  html_document:
+    theme: yeti
+    smart: true
+    highlight: textmate
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+
+
+
+# Map
+## Pa
+### Third sub title
+
+```{r}
+
+library(sf)
+library(tmap)
+library(leafpop)
+library(leaflet)
+library(tmaptools)
+library(tidyverse)
+
+setwd("..")
+
+OSM <- st_read(here::here( "wk5/prac5_data",
+                          "greater-london-latest-free", 
+                          "gis_osm_pois_a_free_1.shp")) %>%
+  st_transform(., 27700) %>%
+  #select hotels only
+  filter(fclass == 'hotel')
+
+Londonborough <- st_read(here::here("wk8_2/prac8_2_data",
+                                    "statistical-gis-boundaries-london", 
+                                    "ESRI", 
+                                    "London_Borough_Excluding_MHW.shp"))%>%
+  st_transform(., 27700)
+
+Airbnb <- read_csv("wk5/prac5_data/listings.csv") %>%
+  st_as_sf(., coords = c("longitude", "latitude"), 
+                   crs = 4326) %>%
+    st_transform(., 27700)%>%
+    #select entire places that are available all year
+    filter(room_type == 'Entire home/apt' & availability_365 =='365')
+
+
+# make a function for the join
+# hint all you have to do is replace data1 and data2
+# with the data you want to use
+
+Joinfun <- function(data1, data2){
+
+output<- data1%>%
+  st_join(Londonborough,.)%>%
+  add_count(GSS_CODE, name="hotels_in_borough") 
+
+  return(output)
+}
+
+# use the function for hotels
+Hotels <- Joinfun(OSM, Londonborough)
+
+# then for airbnb
+Airbnb <- Joinfun(Airbnb, Londonborough)
+
+# now try to arrange the plots with tmap
+breaks = c(0, 5, 12, 26, 57, 286) 
+
+#change the column name from hotels_in_borough for the legend
+Hotels <- Hotels %>%
+  dplyr::rename(`Accomodation count` = hotels_in_borough)
+
+Airbnb <- Airbnb %>%
+  dplyr::rename(`Accomodation count` = hotels_in_borough)
+
+
+Airbnb_count <- Airbnb %>% 
+  count(GSS_CODE)
+Hotels_count <- Hotels %>% 
+  count(NAME)
+
+#join data
+Joined <- Airbnb_count%>%
+  st_join(., Hotels_count, join = st_equals)%>%
+  st_transform(., 4326)%>%
+  rename(`Airbnb count` = `n.x`, 
+         `GSS Code`= GSS_CODE,
+         `Borough`=NAME,
+         `Hotel count` = `n.y`) 
+
+popupairbnb <-Joined %>%
+  st_drop_geometry()%>%
+  dplyr::select(`Airbnb count`, Borough)%>%
+  popupTable()
+
+popuphotel <-Joined %>%
+  st_drop_geometry()%>%
+  dplyr::select(`Hotel count`, Borough)%>%
+  popupTable()
+
+tmap_mode("view")
+
+# set the colour palettes using our previously defined breaks
+
+
+pal1 <- Joined %>%
+  colorBin(palette = "YlOrRd", domain=.$`Airbnb count`, bins=breaks)
+
+pal1 <-colorBin(palette = "YlOrRd", domain=Joined$`Airbnb count`, bins=breaks)
+
+pal2 <- Joined %>%
+  colorBin(palette = "YlOrRd", domain=.$`Hotel count`, bins=breaks)
+
+
+map<- leaflet(Joined) %>%
+  # add basemap options
+  addTiles(group = "OSM (default)") %>%
+  addProviderTiles(providers$Stamen.Toner, group = "Toner") %>%
+  addProviderTiles(providers$Stamen.TonerLite, group = "Toner Lite") %>%
+  addProviderTiles(providers$CartoDB.Positron, group = "CartoDB")%>%
+  
+  #add our polygons, linking to the tables we just made
+  addPolygons(color="white", 
+              weight = 2,
+              opacity = 1,
+              dashArray = "3",
+              popup = popupairbnb,
+              fillOpacity = 0.7,
+              fillColor = ~pal2(`Airbnb count`),
+              group = "Airbnb")%>%
+  
+  addPolygons(fillColor = ~pal2(`Hotel count`), 
+              weight = 2,
+              opacity = 1,
+              color = "white",
+              dashArray = "3",
+              popup = popupairbnb,
+              fillOpacity = 0.7,group = "Hotels")%>%
+  # add a legend
+  addLegend(pal = pal2, values = ~`Hotel count`, group = c("Airbnb","Hotel"), 
+            position ="bottomleft", title = "Accomodation count") %>%
+  # specify layers control
+  addLayersControl(
+    baseGroups = c("OSM (default)", "Toner", "Toner Lite", "CartoDB"),
+    overlayGroups = c("Airbnb", "Hotels"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+
+# plot the map
+map
+```
+

@@ -15,6 +15,10 @@ library(ggplot2)
 library(raster)
 library(janitor)
 library(gstat)
+library(con2aqi)
+library(broom)
+library(dplyr)
+library(elevatr)
 ##Data loading
 
 #spatial
@@ -37,40 +41,31 @@ country<- st_read(here::here("ass_data",
 
 
 lesserpoland <- wojewodztwa %>% 
-  filter(JPT_NAZWA_=='małopolskie')
+  filter(JPT_NAZWA_=='małopolskie')%>% 
+  st_transform(., 2180)
 
 powiaty_LP <- powiaty %>% 
-  filter(str_detect(JPT_KOD_JE,'^12'))
+  filter(str_detect(JPT_KOD_JE,'^12'))%>% 
+  st_transform(., 2180)
 
 gminy_LP <- gminy %>% 
-  filter(str_detect(JPT_KOD_JE,'^12'))
+  filter(str_detect(JPT_KOD_JE,'^12'))%>% 
+  st_transform(., 2180)
 
-#pollution
+gminy_codes <- gminy_LP %>% 
+  dplyr::select(.,"JPT_KOD_JE","JPT_NAZWA_") %>% 
+  st_drop_geometry() %>% 
+  mutate(JPT_KOD_JE = as.numeric(JPT_KOD_JE))
+
+gminy_LP_grouped<-gminy_LP %>% 
+  group_by(JPT_KOD_JE) %>% 
+  group_split()
+
+#Pollution Stations
 
 Stations <- read_csv(here::here("ass_data", 
                                 "csv", 
                                 "Stacje.csv"))
-  
-# loading single pollutant "PM10"
-
-
-# 
-# pm10_poland <- read_csv(here::here("ass_data", 
-#                                 "csv", 
-#                                 "PM10.csv")) %>% 
-#   slice(., -(1))
-#   
-# pm10_poland_sf <- pm10_poland %>%
-#   left_join(.,Stations,
-#             by = c("Kod stacji" = "Kod stacji")) %>% 
-#   drop_na("WGS84 φ N")%>% 
-#   st_as_sf(., 
-#            coords = c("WGS84 λ E","WGS84 φ N"), 
-#            crs = 4326) 
-# 
-# pm10_ls<-pm10_poland_sf %>% 
-#   filter(Województwo.x=='małopolskie')
-
 
 ###Load all pollutants 
 
@@ -102,30 +97,178 @@ for (i in pollutants_csv) {
 #  assign(sprintf("%s_ls",pollutants[[match(i,pollutants_csv)]]), dplyr::filter(filename_2,Województwo.x=='małopolskie'))
      }
 
+### population
+pop <- read_csv(here::here("ass_data", 
+                                "csv", 
+                                "ludnosc.csv")) %>% 
+  slice(.,c(-1,-2,-3,-5)) %>% 
+  row_to_names(row_number = 1) %>% 
+  dplyr::rename(.,area_code=1,area_name=2)
+
+### Density
+density <- read_csv(here::here("ass_data", 
+                           "csv", 
+                           "density.csv")) %>% 
+  slice(.,-2) %>% 
+  row_to_names(row_number = 1) %>% 
+  dplyr::rename(.,area_code=1,area_name=2)  %>% 
+  right_join(.,gminy_codes, by=c("area_code"="JPT_KOD_JE"))
+
+### tourists
+tourists <- read_csv(here::here("ass_data", 
+                               "csv", 
+                               "tourists.csv")) %>% 
+  slice(.,c(-1,-3)) %>% 
+  row_to_names(row_number = 1) %>% 
+  dplyr::rename(.,area_code=1,area_name=2) %>% 
+  right_join(.,gminy_codes, by=c("area_code"="JPT_KOD_JE")) 
+view(tourists)
+
 # adding furnaces csv 
 
 furnaces <- read_csv(here::here("ass_data", 
                                 "csv", 
-                                "furnaces.csv")) %>% 
-              dplyr::select(area_code,area_name,podregion,powiat_name,
-                     typ_gminy,'2013','2014','2015','2016','2017','2018') %>% 
-              drop_na(area_code)
+                                "furnaces_final.csv")) %>% 
+  dplyr::select(area_code,area_name,podregion,powiat_name,
+                typ_gminy,'2008','2009','2010','2011','2012','2013','2014','2015','2016','2017','2018') %>% 
+  drop_na(area_code)
 
 
 furnaces_final <- furnaces %>% 
   mutate(type_n=case_when(str_detect(typ_gminy, "City|Urban$") ~ "1",
                           str_detect(typ_gminy, "Urban-rural") ~ "3",
                           str_detect(typ_gminy, "Rural") ~ "2")) %>% 
-  mutate(area_code=paste(area_code, type_n,sep=""))
+  mutate(area_code=paste(area_code, type_n,sep="")) %>% 
+  mutate(all_removed= rowSums(.[sapply(.,is.numeric)], na.rm = TRUE)) %>% 
+  
 
 
 
 gminy_LP_fur <- gminy_LP %>%
   left_join(.,furnaces_final,
-            by = c("JPT_KOD_JE" = "area_code"))
+            by = c("JPT_KOD_JE"="area_code"))
 
 
-### quick plots 
+#### roads
+
+
+roads <- st_read(here::here("ass_data", 
+                            "geo", 'malopolskie-latest-free',
+                            "gis_osm_roads_free_1.shp"))%>% 
+                      st_transform(., 2180)
+
+roads_lenght <- lapply(gminy_LP_grouped,function(x) sum(st_length(sf::st_intersection(roads,x))))
+
+names<- gminy_codes%>% 
+   arrange(., JPT_KOD_JE) %>%
+   dplyr::select(JPT_KOD_JE) %>% 
+   pull()
+
+   
+roads_df<-as.data.frame(roads_lenght) 
+colnames(roads_df)<- names
+
+roads_df<- roads_df %>% 
+  pivot_longer(everything(), 
+               names_to="area_code", 
+               values_to="roads_lenght_m") %>% 
+  mutate(roads_lenght_m = as.numeric(gsub("[m]$", "", roads_lenght_m))) %>%
+  mutate(area_code=as.numeric(area_code))%>% 
+  left_join(.,gminy_codes,by=c("area_code"="JPT_KOD_JE"))
+
+write.csv(roads_df,here::here("ass_data", 
+                              "csv", 
+                              "roads_lenght.csv"), row.names = FALSE)
+
+#### land use
+
+
+land <- st_read(here::here("ass_data", 
+                            "geo", 'malopolskie-latest-free',
+                            "gis_osm_landuse_a_free_1.shp"))%>% 
+  st_transform(., 2180)
+
+urban<-land %>% 
+  dplyr::filter(fclass=="industrial"|fclass=="retail"|fclass=="residential"|fclass=="commercial"|fclass=="heath")
+
+urban_area <- lapply(gminy_LP_grouped,function(x) sum(st_area(sf::st_intersection(urban,x))))
+total_area <- lapply(gminy_LP_grouped,function(x) st_area(x))
+
+
+urban_df<-as.data.frame(urban_area) 
+total_df<- as.data.frame(total_area) 
+
+colnames(urban_df)<- names
+colnames(total_df)<- names
+
+
+
+urban_df<- urban_df %>% 
+  pivot_longer(everything(), 
+               names_to="area_code", 
+               values_to="urban_area_m2") %>% left_join(.,
+                                                        pivot_longer(total_df,everything(), 
+                                                                     names_to="area_code", 
+                                                                     values_to="total_area_m2"),
+                                                        by="area_code") %>% 
+  mutate(total_area_m2=as.numeric(total_area_m2),
+         urban_area_m2=as.numeric(urban_area_m2),
+         area_code=as.numeric(area_code))%>% 
+  left_join(.,
+            gminy_codes,
+            by=c("area_code"="JPT_KOD_JE")) %>% 
+  mutate(urban_landuse = urban_area_m2/total_area_m2*100) %>% 
+  mutate_at(vars(-area_code,-JPT_NAZWA_), funs(round(., 1)))
+
+write.csv(urban_df,here::here("ass_data", 
+                              "csv", 
+                              "urban_area.csv"), row.names = FALSE)
+##evelation
+
+ls_border <- lesserpoland %>%
+  st_transform(., 2180) %>% 
+  as(., 'Spatial')
+
+loc_df <- data.frame(x = runif(6,min=sp::bbox(buffer(ls_border,10000))[1,1], 
+                               max=sp::bbox(buffer(ls_border,10000))[1,2]),
+                     y = runif(6,min=sp::bbox(buffer(ls_border,10000))[2,1], 
+                               max=sp::bbox(buffer(ls_border,10000))[2,2]))
+
+x <- get_elev_raster(locations = loc_df, prj = sp::proj4string(ls_border), z=10)
+
+elev_mask<-mask(x,ls_border)
+
+writeRaster(elev_mask, filename=here::here("ass_data", 
+                                   "csv", 
+                                   "ls_elevation.tif"), format="GTiff", overwrite=TRUE)
+
+#extracting mean from a raster and adding it to dataframe 2000-2008
+
+elev_gminy <- lapply(gminy_LP_grouped,function(x) raster::extract(elev_mask,x,small=TRUE)) 
+elev_gminy_mean <- elev_gminy %>% 
+  lapply(.,function(x) as.numeric(as.character(unlist(x)))) %>% 
+  lapply(.,function(x) mean(x,na.rm = TRUE))
+
+plot(mask(elev_mask,gminy_LP_grouped[[180]]))
+
+elev_df<-as.data.frame(elev_gminy_mean) 
+
+colnames(elev_df)<- names
+
+elev_df<- elev_df %>% 
+  pivot_longer(everything(), 
+               names_to="area_code", 
+               values_to="elevation_m") %>%
+  mutate(area_code=as.numeric(area_code))%>% 
+  left_join(.,
+            gminy_codes,
+            by=c("area_code"="JPT_KOD_JE")) %>% 
+
+write.csv(elev_df,here::here("ass_data", 
+                              "csv", 
+                              "elevation.csv"), row.names = FALSE)
+
+
 
 ##furnaces
 tmap_mode("view")
@@ -157,6 +300,7 @@ plot(st_geometry(pm10_ls), add=TRUE)
 ls_border <- lesserpoland %>%
   st_transform(., 2180) %>% 
   as(., 'Spatial')
+
 
 # SF -> SP period <=2008 - All pollutants
 for (i in pollutants_csv) {
@@ -207,7 +351,7 @@ for (i in pollutants_csv) {
   # Convert output to raster object 
   assign("ras", raster(interpolate))
   # Clip the raster to Lesserpoland outline
-  assign(sprintf("%s_rs_08",i), mask(ras, ls_border))
+  assign(sprintf("%s_rs_08",i), mask(ras, ls_border)) 
 }
 
 # creating raster - period >2008 - All pollutants
@@ -360,4 +504,50 @@ for (i in gminy_LP$JPT_KOD_JE) {
   
 }
 
+
+
+
+
 ## joining data frames 2000-2008
+pollutants_mean_08 <- pm10_mean_08
+
+pollutans_meansnames_08 <-list(pollutants_mean_08,pm25_mean_08,so2_mean_08,co_mean_08,o3_mean_08,no2_mean_08,nox_mean_08,c6h6_mean_08)
+
+pollutants_mean_08 <- Reduce(function(x,y) left_join(x = x, y = y, by = "code"), 
+       pollutans_meansnames_08)
+
+## joining data frames 2008-2019
+pollutants_mean_19 <- pm10_mean_19
+
+pollutans_meansnames_19 <-list(pollutants_mean_19,pm25_mean_19,
+                               so2_mean_19,co_mean_19,o3_mean_19,no2_mean_19,
+                               nox_mean_19,c6h6_mean_19)
+
+pollutants_mean_19 <- base::Reduce(function(x,y) left_join(x = x, y = y, by = "code"), 
+                             pollutans_meansnames_19) %>% 
+   dplyr::rename(area_code=1)
+
+# 
+# con2aqi(pollutant="pm10",con=68)
+# pollutants_mean_19_test <- pollutants_mean_19 %>% 
+#   mutate(AQI con2aqi(pollutant="co",con=8.4))
+
+
+
+colnames(pollutants_mean_19)
+# quick join
+joined <- furnaces_final %>% 
+  subset( ., select = -type_n)%>% 
+  mutate(all_removed= rowSums(.[sapply(.,is.numeric)], na.rm = TRUE)) %>% 
+  left_join(.,
+            pollutants_mean_19,
+            by='area_code')
+
+
+# quick regression MLR
+
+
+model2 <- lm(pm10_mean_19 ~ all_removed ,
+             data = joined)
+
+tidy(model2)

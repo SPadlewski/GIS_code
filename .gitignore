@@ -14,3 +14,4 @@ wk7/prac7_data/Manchester_boundary/*
 wk9/prac9_data/*
 QM/qm_data/* >>.gitignore
 echo -e qm_data/*
+wk10/prac10_data/*

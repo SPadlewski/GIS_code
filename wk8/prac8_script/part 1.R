@@ -60,6 +60,7 @@ Agehist <- Groups%>%
   facet_wrap(~All_variables, scales = 'free')
 
 
+
 Agehist
 
 
